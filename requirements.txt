@@ -1,1 +1,4 @@
+Pillow>=10.0.0
+PyAutoGUI>=0.9.54
+pytesseract>=0.3.10
 requests>=2.31.0
