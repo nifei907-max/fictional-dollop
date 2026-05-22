@@ -3,7 +3,7 @@
 优化点：
 1) 线程安全：用 Lock/Event 管理共享状态，菜单输入时暂停采集。
 2) 稳定 OCR：增加图像增强与更稳健的数字解析。
-3) 安全性：不在代码中硬编码 API Key，使用环境变量 DEEPSEEK_API_KEY。
+3) 易用性：DeepSeek Key 放在脚本配置区，开箱即用。
 4) AI 结果强校验：自动解析 JSON 并做字段兜底。
 5) 提醒防抖：冷却时间避免连续弹窗轰炸。
 """
@@ -39,6 +39,7 @@ REGIONS = {
 }
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_API_KEY = "请替换成你的DeepSeek Key"
 MAX_PRICE_HISTORY = 60
 POLL_INTERVAL_SEC = 1.0
 ALERT_COOLDOWN_SEC = 15
@@ -125,9 +126,9 @@ def _safe_num(v, default=None):
 
 
 def ai_analyze_and_set_params(rt: Runtime, st: TradeState) -> str:
-    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    if not api_key:
-        return "❌ 未设置 DEEPSEEK_API_KEY 环境变量"
+    api_key = DEEPSEEK_API_KEY.strip()
+    if not api_key or "请替换" in api_key:
+        return "❌ 请先在代码顶部配置 DEEPSEEK_API_KEY"
 
     with rt.lock:
         prices = list(rt.prices)
