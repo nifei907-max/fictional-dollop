@@ -37,6 +37,9 @@ REGIONS = {
     "buy1": (1781, 934, 39, 16),
     "sell1": (1842, 934, 39, 16),
 }
+# 如果你的界面像示例图一样四个字段在同一行，可直接改为这一整行区域：
+# 例如图中这一条可近似设置为 (x, y, 190, 20)
+COMBINED_REGION = None  # e.g. (1661, 934, 220, 18)
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 DEEPSEEK_API_KEY = "请替换成你的DeepSeek Key"
@@ -93,7 +96,41 @@ def ocr_region(region, is_time=False) -> str:
         return ""
 
 
+
+
+def _parse_combined_line(text: str):
+    clean = re.sub(r"[^0-9: ]", " ", text)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    t = re.search(r"\b\d{1,2}:\d{2}:\d{2}\b", clean)
+    nums = re.findall(r"\d+", clean)
+
+    time_text = t.group(0) if t else ""
+    # 如果识别出时间，去掉时间里的3段数字，保留成交/买1/卖1
+    if time_text:
+        hh, mm, ss = time_text.split(":")
+        remaining = nums.copy()
+        for seg in (hh, mm, ss):
+            if seg in remaining:
+                remaining.remove(seg)
+        nums = remaining
+
+    deal = nums[0] if len(nums) > 0 else ""
+    buy1 = nums[1] if len(nums) > 1 else ""
+    sell1 = nums[2] if len(nums) > 2 else ""
+    return time_text, deal, buy1, sell1
+
+
+def snapshot_market_combined(region):
+    raw = ocr_region(region, is_time=True)
+    return _parse_combined_line(raw)
+
 def snapshot_market():
+    if COMBINED_REGION is not None:
+        t, d, b, s = snapshot_market_combined(COMBINED_REGION)
+        # 容错：某一项识别失败时，回退到单字段识别
+        if t and d and b and s:
+            return t, d, b, s
+
     t = ocr_region(REGIONS["time"], is_time=True)
     d = ocr_region(REGIONS["deal"])
     b = ocr_region(REGIONS["buy1"])
@@ -334,6 +371,7 @@ def main():
     print("✅ 后台持续收集数据，平时不调用API")
     print("✅ 手动触发AI，自动计算止盈止损和波动阈值")
     print("✅ 自动提醒完全基于本地参数")
+    print("✅ 支持同一行OCR解析：时间/成交/买1/卖1")
     print("✅ 按回车打开主菜单，输入 q 回车退出")
     print("=" * 65)
 
