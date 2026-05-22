@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import ctypes
 import json
-import os
-import re
 import threading
 import time
 from collections import deque
@@ -23,23 +21,16 @@ from typing import Optional
 import pyautogui
 import pytesseract
 import requests
-from PIL import ImageEnhance, ImageFilter
 
 # ==================== 基础配置 ====================
-# Windows 默认安装路径；如需覆盖请设置环境变量 TESSERACT_CMD
-pytesseract.pytesseract.tesseract_cmd = os.getenv(
-    "TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-)
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 REGIONS = {
-    "time": (1661, 934, 57, 16),
-    "deal": (1721, 934, 38, 16),
-    "buy1": (1781, 934, 39, 16),
-    "sell1": (1842, 934, 39, 16),
+    "time":   (1661, 934, 57, 16),
+    "deal":   (1721, 934, 38, 16),
+    "buy1":   (1781, 934, 39, 16),
+    "sell1":  (1842, 934, 39, 16),
 }
-# 如果你的界面像示例图一样四个字段在同一行，可直接改为这一整行区域：
-# 例如图中这一条可近似设置为 (x, y, 190, 20)
-COMBINED_REGION = None  # e.g. (1661, 934, 220, 18)
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 DEEPSEEK_API_KEY = "请替换成你的DeepSeek Key"
@@ -71,70 +62,27 @@ class Runtime:
     last_alert_ts: float = 0.0
 
 
-def _enhance_for_ocr(img):
-    gray = img.convert("L")
-    gray = ImageEnhance.Contrast(gray).enhance(2.2)
-    gray = ImageEnhance.Sharpness(gray).enhance(2.0)
-    gray = gray.filter(ImageFilter.MedianFilter(size=3))
-    return gray
-
-
-def _extract_digits(text: str) -> str:
-    return "".join(ch for ch in text if ch.isdigit())
-
-
-def ocr_region(region, is_time=False) -> str:
+def ocr(region, is_time=False):
     try:
         img = pyautogui.screenshot(region=region)
-        img = _enhance_for_ocr(img)
-        cfg = "--psm 7 -c tessedit_char_whitelist=0123456789:" if is_time else "--psm 7 -c tessedit_char_whitelist=0123456789"
-        raw = pytesseract.image_to_string(img, config=cfg).strip()
         if is_time:
-            return raw
-        return _extract_digits(raw)[:8]  # 防止OCR粘连过长
+            cfg = '--psm 7 -c tessedit_char_whitelist=0123456789:'
+        else:
+            cfg = '--psm 7 -c tessedit_char_whitelist=0123456789'
+        text = pytesseract.image_to_string(img, config=cfg).strip()
+        if not is_time:
+            nums = ''.join(c for c in text if c.isdigit())
+            return nums[:4]
+        return text
     except Exception:
         return ""
 
 
-
-
-def _parse_combined_line(text: str):
-    clean = re.sub(r"[^0-9: ]", " ", text)
-    clean = re.sub(r"\s+", " ", clean).strip()
-    t = re.search(r"\b\d{1,2}:\d{2}:\d{2}\b", clean)
-    nums = re.findall(r"\d+", clean)
-
-    time_text = t.group(0) if t else ""
-    # 如果识别出时间，去掉时间里的3段数字，保留成交/买1/卖1
-    if time_text:
-        hh, mm, ss = time_text.split(":")
-        remaining = nums.copy()
-        for seg in (hh, mm, ss):
-            if seg in remaining:
-                remaining.remove(seg)
-        nums = remaining
-
-    deal = nums[0] if len(nums) > 0 else ""
-    buy1 = nums[1] if len(nums) > 1 else ""
-    sell1 = nums[2] if len(nums) > 2 else ""
-    return time_text, deal, buy1, sell1
-
-
-def snapshot_market_combined(region):
-    raw = ocr_region(region, is_time=True)
-    return _parse_combined_line(raw)
-
-def snapshot_market():
-    if COMBINED_REGION is not None:
-        t, d, b, s = snapshot_market_combined(COMBINED_REGION)
-        # 容错：某一项识别失败时，回退到单字段识别
-        if t and d and b and s:
-            return t, d, b, s
-
-    t = ocr_region(REGIONS["time"], is_time=True)
-    d = ocr_region(REGIONS["deal"])
-    b = ocr_region(REGIONS["buy1"])
-    s = ocr_region(REGIONS["sell1"])
+def get_all_data():
+    t = ocr(REGIONS["time"], is_time=True)
+    d = ocr(REGIONS["deal"])
+    b = ocr(REGIONS["buy1"])
+    s = ocr(REGIONS["sell1"])
     return t, d, b, s
 
 
@@ -164,8 +112,6 @@ def _safe_num(v, default=None):
 
 def ai_analyze_and_set_params(rt: Runtime, st: TradeState) -> str:
     api_key = DEEPSEEK_API_KEY.strip()
-    if not api_key or "请替换" in api_key:
-        return "❌ 请先在代码顶部配置 DEEPSEEK_API_KEY"
 
     with rt.lock:
         prices = list(rt.prices)
@@ -292,7 +238,7 @@ def show_loop(rt: Runtime, st: TradeState):
             time.sleep(0.1)
             continue
 
-        t, d, b, s = snapshot_market()
+        t, d, b, s = get_all_data()
         with rt.lock:
             rt.latest_time, rt.latest_deal, rt.latest_buy1, rt.latest_sell1 = t, d, b, s
 
