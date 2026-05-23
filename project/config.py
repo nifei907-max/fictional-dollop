@@ -97,3 +97,19 @@ DEEPSEEK_SYSTEM_PROMPT = """你是专业量化交易分析AI。
   "reason": ""
 }
 """
+
+
+@dataclass
+class RuleConfig:
+    """本地兜底规则配置。"""
+
+    enabled: bool = True
+    rsi_long_threshold: float = 55.0
+    rsi_short_threshold: float = 45.0
+
+
+@dataclass
+class NotifyConfig:
+    """通知去抖动配置。"""
+
+    cooldown_seconds: int = 120

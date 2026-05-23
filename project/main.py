@@ -1,4 +1,4 @@
-"""主程序入口。"""
+"""主程序入口（第二阶段增强版）。"""
 
 from __future__ import annotations
 
@@ -7,11 +7,12 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from config import APIConfig, AppConfig, CandleConfig, CaptureConfig, OCRConfig
+from config import APIConfig, AppConfig, CandleConfig, CaptureConfig, NotifyConfig, OCRConfig, RuleConfig
 from deepseek_client import DeepSeekClient
 from indicators import MarketDataManager
 from notifier import Notifier
 from ocr_reader import OCRReader
+from rule_engine import RuleEngine
 from screen_capture import ScreenCapture
 from strategy import StrategyBuilder
 
@@ -35,7 +36,9 @@ def main() -> None:
     data_mgr = MarketDataManager(CandleConfig(), app_cfg.tick_csv, app_cfg.candle_csv)
     deepseek = DeepSeekClient(APIConfig())
     strategy = StrategyBuilder()
-    notifier = Notifier()
+    notifier = Notifier(NotifyConfig())
+    rule_cfg = RuleConfig()
+    fallback_rule = RuleEngine(rule_cfg.rsi_long_threshold, rule_cfg.rsi_short_threshold)
 
     logging.info("系统启动完成，开始循环采集。")
 
@@ -49,7 +52,7 @@ def main() -> None:
                 continue
 
             now = datetime.now(timezone.utc)
-            data_mgr.add_tick(now, price, volume=0.0)
+            data_mgr.add_tick(now, price, volume=1.0)
             candles = data_mgr.build_candles()
             candles = data_mgr.compute_indicators()
             data_mgr.persist()
@@ -60,8 +63,15 @@ def main() -> None:
                 continue
 
             prompt = strategy.build_prompt(candles)
-            result = deepseek.analyze(prompt)
-            logging.info("DeepSeek 返回：%s", json.dumps(result, ensure_ascii=False))
+            try:
+                result = deepseek.analyze(prompt)
+                logging.info("DeepSeek 返回：%s", json.dumps(result, ensure_ascii=False))
+            except Exception as api_exc:
+                logging.exception("DeepSeek 调用失败，切换本地规则兜底：%s", api_exc)
+                if rule_cfg.enabled:
+                    result = fallback_rule.analyze(candles)
+                else:
+                    result = {"signal": "HOLD", "reason": "API失败且未启用兜底规则"}
 
             signal = result.get("signal", "HOLD")
             reason = result.get("reason", "无说明")
