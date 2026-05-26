@@ -187,7 +187,7 @@ class MarketDataManager:
             "close": float(candle["close"]),
             "volume": float(candle.get("volume", 0)),
         }
-        self.candles = pd.concat([self.candles, pd.DataFrame([row])], ignore_index=True)
+        self.candles.loc[len(self.candles)] = row
         if len(self.candles) > self.candle_cfg.max_rows:
             self.candles = self.candles.iloc[-self.candle_cfg.max_rows:].reset_index(drop=True)
 ```
@@ -824,19 +824,40 @@ import tkinter as tk
 from main_gui import TradingApp, data_mgr, state
 from queues import tick_queue
 
+def _build_demo_df(rows=120):
+    now = pd.Timestamp.utcnow().floor("min")
+    ts = pd.date_range(end=now, periods=rows, freq="min")
+    base = 100.0
+    closes = [base + ((i % 20) - 10) * 0.4 for i in range(rows)]
+    data = []
+    for i, c in enumerate(closes):
+        o = closes[i - 1] if i > 0 else c
+        h = max(o, c) + 0.6
+        l = min(o, c) - 0.6
+        data.append({"timestamp": ts[i], "open": o, "high": h, "low": l, "close": c, "volume": 0})
+    return pd.DataFrame(data)
+
+
 def load_sim_data(path="sim_data.csv"):
-    df = pd.read_csv(path)
-    if "timestamp" not in df.columns and "time" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["time"], errors="coerce")
-    else:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    try:
+        df = pd.read_csv(path)
+        if "timestamp" not in df.columns and "time" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["time"], errors="coerce")
+        else:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    except FileNotFoundError:
+        print(f"{path} not found, using built-in demo data")
+        df = _build_demo_df()
+
     for _,r in df.dropna(subset=["timestamp"]).iterrows():
         data_mgr.add_candle({"timestamp":r["timestamp"].to_pydatetime().replace(tzinfo=timezone.utc),"open":r["open"],"high":r["high"],"low":r["low"],"close":r["close"],"volume":r.get("volume",0)})
+
     def feed():
         for _,r in df.tail(60).iterrows():
             p=float(r["close"]); state.update_price(p)
             tick_queue.put((p, datetime.now(timezone.utc)), timeout=0.2)
             time.sleep(0.8)
+
     threading.Thread(target=feed, daemon=True).start()
 
 if __name__ == "__main__":
