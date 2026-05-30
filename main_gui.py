@@ -28,7 +28,6 @@ from queues import tick_queue, candle_queue, signal_queue
 from ocr_worker import run_ocr_worker
 from candle_worker import run_candle_worker
 from analysis_worker import run_analysis_worker
-from execution_worker import run_execution_worker
 from risk_worker import risk_worker
 
 from data_manager import MarketDataManager
@@ -372,7 +371,6 @@ class TradingApp:
             threading.Thread(target=run_ocr_worker, args=(state, stop_event, self.tick_engine), daemon=True),
             threading.Thread(target=run_candle_worker, args=(state, stop_event), daemon=True),
             threading.Thread(target=run_analysis_worker, args=(state, stop_event), daemon=True),
-            threading.Thread(target=run_execution_worker, args=(state, stop_event), daemon=True),
             threading.Thread(target=rw.risk_worker, args=(state, stop_event), daemon=True),
         ]
         for t in self.threads:
@@ -502,8 +500,7 @@ class TradingApp:
                     df = mgr.candles.tail(100).copy()
                 if len(df) >= 5:
                     if len(df) >= 15:
-                        closed_df = df.iloc[:-1]
-                        ind = strategy.calculate_indicators(closed_df)
+                        ind = strategy.calculate_indicators(df)
                         self.trend_label.configure(text=ind.get("trend", "--"))
                         self.rsi_label.configure(text=f"{ind['rsi']:.1f}")
                         macd_status = "多头" if ind.get("macd_bullish") else "空头"

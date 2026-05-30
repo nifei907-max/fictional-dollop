@@ -7,6 +7,7 @@
 
 import threading
 import queue
+import time
 import pandas as pd
 from queues import candle_queue, signal_queue
 from runtime_state import RuntimeState
@@ -16,6 +17,7 @@ import candle_worker
 data_mgr = None
 tick_engine = None
 gui_queue = None
+_last_ai_time = 0.0
 
 
 def update_market_state(state, ind, tick_indicators, current_price):
@@ -113,113 +115,130 @@ def update_market_state(state, ind, tick_indicators, current_price):
         state.set_market_state("WAITING")
 
 
-def run_analysis_worker(state: RuntimeState, stop_event: threading.Event):
-    global data_mgr, tick_engine, gui_queue
-    while not stop_event.is_set():
-        try:
-            item = candle_queue.get(timeout=0.5)
-        except queue.Empty:
-            continue
-        except Exception:
-            continue
+def _build_dataframe_with_forming():
+    if data_mgr is None:
+        return None, None, False
 
-        if isinstance(item, dict) and item.get("force"):
-            continue
+    with data_mgr._data_lock:
+        df = data_mgr.candles.tail(100).copy()
+    if len(df) < 15:
+        return None, None, False
 
-        if data_mgr is None:
-            continue
-
-        with data_mgr._data_lock:
-            df = data_mgr.candles.tail(100).copy()
-        if len(df) < 15:
-            continue
-
-        if candle_worker.candle_engine is not None:
-            current = candle_worker.candle_engine.current_candle
-            if current is not None:
-                forming = {
-                    "timestamp": current["time"],
-                    "open": current["open"],
-                    "high": current["high"],
-                    "low": current["low"],
-                    "close": current["close"],
-                    "volume": current["volume"],
-                }
-                df = pd.concat([df, pd.DataFrame([forming])], ignore_index=True)
-
-        closed_df = df.iloc[:-1]
-        if len(closed_df) >= 14:
-            ind = strategy.calculate_indicators(closed_df)
-            atr = ind.get("atr", 2.0)
-            burst_threshold = max(0.5, atr * 0.1)
-        else:
-            burst_threshold = 0.5
-
-        tick_indicators = {}
-        if tick_engine is not None:
-            tick_indicators = {
-                "speed": tick_engine.tick_speed(),
-                "momentum": tick_engine.tick_momentum(),
-                "mean_price": tick_engine.tick_mean_price(),
-                "acceleration": tick_engine.tick_acceleration(),
-                "burst": tick_engine.is_burst(threshold=burst_threshold),
-                "strength": tick_engine.get_tick_strength(),
-                "micro_trend": tick_engine.micro_trend(),
-                "pressure": tick_engine.pressure_score(),
-                "consistency": tick_engine.tick_consistency(),
-                "orderbook_pressure": tick_engine.orderbook_pressure(),
-                "active_imbalance": tick_engine.active_imbalance(),
-                "aggressive_buying": tick_engine.aggressive_buying(),
-                "aggressive_selling": tick_engine.aggressive_selling(),
+    has_forming = False
+    if candle_worker.candle_engine is not None:
+        current = candle_worker.candle_engine.current_candle
+        if current is not None:
+            forming = {
+                "timestamp": current["time"],
+                "open": current["open"],
+                "high": current["high"],
+                "low": current["low"],
+                "close": current["close"],
+                "volume": current["volume"],
             }
+            df = pd.concat([df, pd.DataFrame([forming])], ignore_index=True)
+            has_forming = True
 
-        current_price = df.iloc[-1]["close"]
-        # 更新市场状态（生命周期）
-        update_market_state(state, ind, tick_indicators, current_price)
+    closed_df = df.iloc[:-1] if has_forming else df
+    return df, closed_df, has_forming
 
-        # 使用状态机驱动入场
-        market_state = state.get_market_state()
-        signal = strategy.state_based_trade_rule(
-            df=df, state=state, tick_indicators=tick_indicators, market_state=market_state
-        )
 
-        if signal:
+def _collect_tick_indicators(burst_threshold):
+    if tick_engine is None:
+        return {}
+    return {
+        "speed": tick_engine.tick_speed(),
+        "momentum": tick_engine.tick_momentum(),
+        "mean_price": tick_engine.tick_mean_price(),
+        "acceleration": tick_engine.tick_acceleration(),
+        "burst": tick_engine.is_burst(threshold=burst_threshold),
+        "strength": tick_engine.get_tick_strength(),
+        "micro_trend": tick_engine.micro_trend(),
+        "pressure": tick_engine.pressure_score(),
+        "consistency": tick_engine.tick_consistency(),
+        "orderbook_pressure": tick_engine.orderbook_pressure(),
+        "active_imbalance": tick_engine.active_imbalance(),
+        "aggressive_buying": tick_engine.aggressive_buying(),
+        "aggressive_selling": tick_engine.aggressive_selling(),
+    }
+
+
+def analyze_once(state: RuntimeState):
+    global _last_ai_time
+    df, closed_df, _ = _build_dataframe_with_forming()
+    if df is None or closed_df is None or len(closed_df) < 14:
+        return
+
+    ind = strategy.calculate_indicators(closed_df)
+    atr = ind.get("atr", 2.0)
+    burst_threshold = max(0.5, atr * 0.1)
+    tick_indicators = _collect_tick_indicators(burst_threshold)
+
+    current_price = df.iloc[-1]["close"]
+    update_market_state(state, ind, tick_indicators, current_price)
+
+    market_state = state.get_market_state()
+    signal = strategy.state_based_trade_rule(
+        df=df, state=state, tick_indicators=tick_indicators, market_state=market_state
+    )
+
+    if signal:
+        if gui_queue:
+            try:
+                gui_queue.put_nowait(("signal", signal))
+            except Exception:
+                pass
+        else:
             signal_queue.put(signal)
-            real_time_price = state.get_price()
-            if real_time_price is None:
-                real_time_price = df.iloc[-1]["close"]
-            ind_full = strategy.calculate_indicators(df)
-            explanation = strategy.explain_analysis(ind_full, real_time_price, signal)
-            if gui_queue:
-                try:
-                    gui_queue.put_nowait(("explain", explanation))
-                except:
-                    pass
-            # 反向信号提醒
-            pos, _ = state.get_position()
-            if pos is not None:
-                pos_side = pos.get("side")
-                signal_side = signal.get("side")
-                if pos_side == "LONG" and signal_side == "SHORT":
-                    msg = "⚠️ 反向信号：持有多单，出现做空信号，建议平仓！"
-                    if gui_queue:
-                        try:
-                            gui_queue.put_nowait(("warning", msg))
-                        except:
-                            pass
-                elif pos_side == "SHORT" and signal_side == "LONG":
-                    msg = "⚠️ 反向信号：持有空单，出现做多信号，建议平仓！"
-                    if gui_queue:
-                        try:
-                            gui_queue.put_nowait(("warning", msg))
-                        except:
-                            pass
 
-        # AI 分析（当 state.analysis_mode == 0 时）
-        if state.analysis_mode == 0 and len(closed_df) >= 14:
+        real_time_price = state.get_price() or current_price
+        ind_full = strategy.calculate_indicators(df)
+        explanation = strategy.explain_analysis(ind_full, real_time_price, signal)
+        if gui_queue:
+            try:
+                gui_queue.put_nowait(("explain", explanation))
+            except Exception:
+                pass
+
+        pos, _ = state.get_position()
+        if pos is not None:
+            pos_side = pos.get("side")
+            signal_side = signal.get("side")
+            if pos_side == "LONG" and signal_side == "SHORT":
+                msg = "⚠️ 反向信号：持有多单，出现做空信号，建议平仓！"
+            elif pos_side == "SHORT" and signal_side == "LONG":
+                msg = "⚠️ 反向信号：持有空单，出现做多信号，建议平仓！"
+            else:
+                msg = None
+            if msg and gui_queue:
+                try:
+                    gui_queue.put_nowait(("warning", msg))
+                except Exception:
+                    pass
+
+    if state.analysis_mode == 0 and len(closed_df) >= 14:
+        now = time.time()
+        if now - _last_ai_time >= 30:
+            _last_ai_time = now
             try:
                 ai_text = strategy.run_ai_analysis(df, state)
                 if ai_text and gui_queue:
                     gui_queue.put_nowait(("ai", ai_text))
             except Exception as e:
                 print(f"AI分析异常: {e}")
+
+
+def run_analysis_worker(state: RuntimeState, stop_event: threading.Event):
+    # 队列有新收盘K线时立即分析；没有新K线时也每 0.5 秒分析 forming candle。
+    while not stop_event.is_set():
+        try:
+            candle_queue.get(timeout=0.5)
+        except queue.Empty:
+            pass
+        except Exception:
+            pass
+
+        try:
+            analyze_once(state)
+        except Exception as e:
+            print(f"分析线程异常: {e}")

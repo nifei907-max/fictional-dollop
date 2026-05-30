@@ -2,8 +2,6 @@
 实时K线图窗口（修复数据类型错误，支持自动清洗）
 """
 import tkinter as tk
-import threading
-import time
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -25,13 +23,13 @@ class KlineChartWindow:
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.win)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        self.update_thread = threading.Thread(target=self.auto_refresh, daemon=True)
-        self.update_thread.start()
+        self.schedule_refresh()
 
-    def auto_refresh(self):
-        while self.running:
-            self.draw_chart()
-            time.sleep(self.refresh_interval)
+    def schedule_refresh(self):
+        if not self.running:
+            return
+        self.draw_chart()
+        self.win.after(int(self.refresh_interval * 1000), self.schedule_refresh)
 
     def sanitize_ohlc(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()

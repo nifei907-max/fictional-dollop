@@ -17,7 +17,6 @@
 import time
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
 from config import NotifyConfig, APIConfig
 from runtime_state import RuntimeState
 from deepseek_client import DeepSeekClient
@@ -94,11 +93,7 @@ def get_params():
         "DIRECTION_LOCK_TIME",
         "STOP_AFTER_LOSS",
         "PAUSE_AFTER_MAX_LOSS",
-        "MIN_RANGE",
-        "MAX_RANGE",
         "PULLBACK_DISTANCE",
-        "ATR_MIN",
-        "ATR_MAX",
         "LONG_TERM_EMA",
         "ACTIVE_WEIGHT",
     ]
@@ -115,11 +110,25 @@ _pullback_bars_long = 0
 _pullback_bars_short = 0
 
 
+def round_to_even_price(price):
+    """价格最小变动单位为 2 点，统一取最近偶数整数。"""
+    return int(round(float(price) / 2) * 2)
+
+
+def even_points(points, min_points=2):
+    """止盈止损点数统一为偶数点。"""
+    value = max(min_points, int(round(float(points))))
+    return max(2, int(round(value / 2) * 2))
+
+
 def calculate_atr(high, low, close, period=14):
     close_series = pd.Series(close)
     prev_close = close_series.shift(1).fillna(close[0])
-    tr = np.maximum(high - low, np.abs(high - prev_close.values), np.abs(low - prev_close.values))
-    return np.mean(tr[-period:]) if len(tr) >= period else np.mean(tr)
+    high_low = high - low
+    high_close = np.abs(high - prev_close.values)
+    low_close = np.abs(low - prev_close.values)
+    tr = np.maximum(high_low, np.maximum(high_close, low_close))
+    return float(np.mean(tr[-period:])) if len(tr) >= period else float(np.mean(tr))
 
 
 def consecutive_count(opens, closes, direction="bull"):
@@ -246,7 +255,7 @@ def local_trade_rule(df: pd.DataFrame, state: RuntimeState, tick_indicators: dic
 
     ind = calculate_indicators(df)
 
-    if ind["atr"] < 2 or ind["atr"] > 8:
+    if ind["atr"] < params["ATR_MIN"] or ind["atr"] > params["ATR_MAX"]:
         return None
 
     risk = state.get_risk_state()
@@ -305,8 +314,8 @@ def _trend_breakout_strategy(ind, current_price, state, required_score, current_
     if tick_indicators is None:
         tick_indicators = {}
     params = get_params()
-    stop_points = max(2, round(ind["atr"] * params["TREND_STOP_MULT"]))
-    take_points = max(3, round(ind["atr"] * params["TREND_TAKE_MULT"]))
+    stop_points = even_points(ind["atr"] * params["TREND_STOP_MULT"], 2)
+    take_points = even_points(ind["atr"] * params["TREND_TAKE_MULT"], 4)
 
     ema7 = ind["ema_mid"]
     ema13 = ind["ema_long"]
@@ -396,19 +405,21 @@ def _trend_breakout_strategy(ind, current_price, state, required_score, current_
             short_score += 1
 
     if trend_up and pullback_long and long_score >= required_score:
-        stop = current_price - stop_points
-        take = current_price + take_points
-        signal = {"side": "LONG", "entry": current_price, "stop": stop, "take": take, "reason": "趋势突破做多"}
-        state.record_signal("LONG", current_price, stop, take, "趋势突破做多")
+        entry = round_to_even_price(current_price)
+        stop = entry - stop_points
+        take = entry + take_points
+        signal = {"side": "LONG", "entry": entry, "stop": stop, "take": take, "reason": "趋势突破做多"}
+        state.record_signal("LONG", entry, stop, take, "趋势突破做多")
         if current_candle_time is not None:
             state.last_signal_candle_time = current_candle_time
         return signal
 
     if trend_down and pullback_short and short_score >= required_score:
-        stop = current_price + stop_points
-        take = current_price - take_points
-        signal = {"side": "SHORT", "entry": current_price, "stop": stop, "take": take, "reason": "趋势突破做空"}
-        state.record_signal("SHORT", current_price, stop, take, "趋势突破做空")
+        entry = round_to_even_price(current_price)
+        stop = entry + stop_points
+        take = entry - take_points
+        signal = {"side": "SHORT", "entry": entry, "stop": stop, "take": take, "reason": "趋势突破做空"}
+        state.record_signal("SHORT", entry, stop, take, "趋势突破做空")
         if current_candle_time is not None:
             state.last_signal_candle_time = current_candle_time
         return signal
@@ -420,25 +431,27 @@ def _range_reversal_strategy(ind, current_price, state, current_candle_time=None
     if tick_indicators is None:
         tick_indicators = {}
     params = get_params()
-    stop_points = max(2, round(ind["atr"] * params["RANGE_STOP_MULT"]))
-    take_points = max(3, round(ind["atr"] * params["RANGE_TAKE_MULT"]))
+    stop_points = even_points(ind["atr"] * params["RANGE_STOP_MULT"], 2)
+    take_points = even_points(ind["atr"] * params["RANGE_TAKE_MULT"], 4)
 
     rsi_rising = ind["rsi"] > ind["prev_rsi"] and ind["prev_rsi"] < params["RSI_OS_LONG"]
     rsi_falling = ind["rsi"] < ind["prev_rsi"] and ind["prev_rsi"] > params["RSI_OB_SHORT"]
 
     if rsi_rising and ind["rsi"] < 50:
-        stop = current_price - stop_points
-        take = current_price + take_points
-        signal = {"side": "LONG", "entry": current_price, "stop": stop, "take": take, "reason": "横盘反转做多"}
-        state.record_signal("LONG", current_price, stop, take, "横盘反转做多")
+        entry = round_to_even_price(current_price)
+        stop = entry - stop_points
+        take = entry + take_points
+        signal = {"side": "LONG", "entry": entry, "stop": stop, "take": take, "reason": "横盘反转做多"}
+        state.record_signal("LONG", entry, stop, take, "横盘反转做多")
         if current_candle_time is not None:
             state.last_signal_candle_time = current_candle_time
         return signal
     if rsi_falling and ind["rsi"] > 50:
-        stop = current_price + stop_points
-        take = current_price - take_points
-        signal = {"side": "SHORT", "entry": current_price, "stop": stop, "take": take, "reason": "横盘反转做空"}
-        state.record_signal("SHORT", current_price, stop, take, "横盘反转做空")
+        entry = round_to_even_price(current_price)
+        stop = entry + stop_points
+        take = entry - take_points
+        signal = {"side": "SHORT", "entry": entry, "stop": stop, "take": take, "reason": "横盘反转做空"}
+        state.record_signal("SHORT", entry, stop, take, "横盘反转做空")
         if current_candle_time is not None:
             state.last_signal_candle_time = current_candle_time
         return signal
@@ -505,59 +518,124 @@ def run_ai_analysis(df: pd.DataFrame, state: RuntimeState):
 
 
 # ==================== 状态机驱动入场函数 ====================
+def _current_candle_time(df):
+    if "timestamp" not in df.columns:
+        return None
+    try:
+        return pd.Timestamp(df.iloc[-1]["timestamp"])
+    except Exception:
+        return None
+
+
+def _pass_common_signal_filters(df, state, ind, params, current_candle_time):
+    if not is_active_time():
+        return False
+    if state.is_daily_loss_limit():
+        return False
+    pos, _ = state.get_position()
+    if pos is not None:
+        return False
+    if ind["atr"] < params["ATR_MIN"] or ind["atr"] > params["ATR_MAX"]:
+        return False
+    if ind["rsi"] > params["RSI_LONG_MAX"] or ind["rsi"] < params["RSI_SHORT_MIN"]:
+        return False
+    if ind["bull_consecutive"] >= params["EXHAUSTION_COUNT"]:
+        return False
+    if ind["bear_consecutive"] >= params["EXHAUSTION_COUNT"]:
+        return False
+    if ind["recent_range"] < params["MIN_RANGE"] or ind["recent_range"] > params["MAX_RANGE"]:
+        return False
+
+    now = time.time()
+    if state.consecutive_losses >= params["MAX_CONSECUTIVE_LOSS"]:
+        if now - state.last_stopout_time < params["PAUSE_AFTER_MAX_LOSS"]:
+            return False
+        state.consecutive_losses = 0
+
+    risk = state.get_risk_state()
+    if current_candle_time is not None and state.last_signal_candle_time is not None:
+        elapsed = abs((current_candle_time - state.last_signal_candle_time).total_seconds())
+        if elapsed < params["SIGNAL_COOLDOWN"]:
+            return False
+    elif now - risk["last_signal_time"] < params["SIGNAL_COOLDOWN"]:
+        return False
+
+    if now - risk["last_stopout_time"] < params["STOP_AFTER_LOSS"]:
+        return False
+    return True
+
+
+def _build_signal(state, side, entry_price, stop_points, take_points, reason, current_candle_time):
+    entry = round_to_even_price(entry_price)
+    if side == "LONG":
+        stop = entry - stop_points
+        take = entry + take_points
+    else:
+        stop = entry + stop_points
+        take = entry - take_points
+
+    signal = {"side": side, "entry": entry, "stop": stop, "take": take, "reason": reason}
+    state.record_signal(side, entry, stop, take, reason)
+    if current_candle_time is not None:
+        state.last_signal_candle_time = current_candle_time
+    return signal
+
+
 def state_based_trade_rule(df, state, tick_indicators, market_state):
-    """
-    状态机驱动交易 - 基于EMA回调 + tick动量确认 + ATR动态止损止盈
-    """
+    """状态机驱动交易：EMA 回调 + tick 动量 + 主动买卖确认。"""
     params = get_params()
+    if tick_indicators is None:
+        tick_indicators = {}
     if len(df) < 30:
         return None
+
     ind = calculate_indicators(df)
+    current_candle_time = _current_candle_time(df)
+    if not _pass_common_signal_filters(df, state, ind, params, current_candle_time):
+        return None
+
     current_price = float(df.iloc[-1]["close"])
-    ema_short = ind["ema_mid"]
-    # 计算EMA30
+    ema_fast = ind["ema_mid"]
     ema30 = df["close"].ewm(span=30, adjust=False).mean().iloc[-1]
-    trend_up = ema_short > ema30
-    trend_down = ema_short < ema30
-    atr = ind["atr"]
+    trend_up = current_price > ema30 and ema_fast > ema30
+    trend_down = current_price < ema30 and ema_fast < ema30
 
-    # 动态参数
     pullback_dist = params.get("PULLBACK_DISTANCE", 2)
-    stop_mult = params.get("ATR_STOP_MULT", 0.7)
-    take_mult = params.get("ATR_TAKE_MULT", 1.2)
-    stop_points = max(2, round(atr * stop_mult))
-    take_points = max(3, round(atr * take_mult))
+    stop_points = even_points(ind["atr"] * params.get("ATR_STOP_MULT", 0.8), 2)
+    take_points = even_points(ind["atr"] * params.get("ATR_TAKE_MULT", 1.5), 4)
 
-    # tick 动量确认
     tick_mom = tick_indicators.get("momentum", 0)
     tick_consistency = tick_indicators.get("consistency", 0.5)
     active_imbalance = tick_indicators.get("active_imbalance", 0)
+    active_threshold = params.get("ACTIVE_IMBALANCE_THRESHOLD", 0.3)
+    consistency_threshold = params.get("TICK_CONSISTENCY_THRESHOLD", 0.6)
 
-    # 多头入场
+    near_ema = abs(current_price - ema_fast) <= pullback_dist
+
     if market_state in ("EARLY_LONG", "TREND_LONG", "STRONG_LONG"):
-        if trend_up and abs(current_price - ema_short) <= pullback_dist:
-            if tick_mom > 0 and tick_consistency > 0.5:
-                # 主动买卖确认
-                if active_imbalance > 0.3:
-                    signal = {
-                        "side": "LONG",
-                        "entry": current_price,
-                        "stop": round(current_price - stop_points, 0),
-                        "take": round(current_price + take_points, 0),
-                        "reason": f"回调+tick+主动确认 ({market_state})",
-                    }
-                    return signal
-    # 空头入场
+        if trend_up and near_ema and current_price >= ema_fast:
+            if tick_mom > 0 and tick_consistency >= consistency_threshold and active_imbalance >= active_threshold:
+                return _build_signal(
+                    state,
+                    "LONG",
+                    current_price,
+                    stop_points,
+                    take_points,
+                    f"回调+tick+主动确认 ({market_state})",
+                    current_candle_time,
+                )
+
     if market_state in ("EARLY_SHORT", "TREND_SHORT", "STRONG_SHORT"):
-        if trend_down and abs(current_price - ema_short) <= pullback_dist:
-            if tick_mom < 0 and tick_consistency > 0.5:
-                if active_imbalance < -0.3:
-                    signal = {
-                        "side": "SHORT",
-                        "entry": current_price,
-                        "stop": round(current_price + stop_points, 0),
-                        "take": round(current_price - take_points, 0),
-                        "reason": f"回调+tick+主动确认 ({market_state})",
-                    }
-                    return signal
+        if trend_down and near_ema and current_price <= ema_fast:
+            if tick_mom < 0 and tick_consistency >= consistency_threshold and active_imbalance <= -active_threshold:
+                return _build_signal(
+                    state,
+                    "SHORT",
+                    current_price,
+                    stop_points,
+                    take_points,
+                    f"回调+tick+主动确认 ({market_state})",
+                    current_candle_time,
+                )
+
     return None

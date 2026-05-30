@@ -71,6 +71,9 @@ class MarketDataManager:
             if len(self.candles) == 0:
                 return
 
+            dirname = os.path.dirname(str(self.candle_csv))
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
             self.candles.to_csv(self.candle_csv, index=False, encoding="utf-8-sig")
 
     def save(self):
