@@ -16,6 +16,8 @@ DEFAULT_CONFIG = {
     "capture": {"left": 0, "top": 0, "width": 0, "height": 0, "interval_seconds": 0.5},  # 保留向后兼容，但不再使用
     "time_region": {"left": 0, "top": 0, "width": 0, "height": 0},
     "price_region": {"left": 0, "top": 0, "width": 0, "height": 0},
+    "bid1_price_region": {"left": 0, "top": 0, "width": 0, "height": 0},
+    "ask1_price_region": {"left": 0, "top": 0, "width": 0, "height": 0},
     "min_price_change": 1,
     "max_price_jump": 20,
     "tesseract_cmd": "./Tesseract-OCR/tesseract.exe",
@@ -44,15 +46,23 @@ class ConfigManager:
         self.config = self.load()
 
     def load(self) -> dict:
+        config = copy.deepcopy(DEFAULT_CONFIG)
         if os.path.exists(self.filepath):
             try:
                 with open(self.filepath, "r", encoding="utf-8") as f:
                     user_config = json.load(f)
-                    # 可在此处合并默认配置，但简单起见直接返回用户配置
-                    return user_config
+                return self._deep_merge(config, user_config)
             except Exception as e:
                 print(f"[Config] 配置读取失败: {e}，将使用默认配置")
-        return copy.deepcopy(DEFAULT_CONFIG)
+        return config
+
+    def _deep_merge(self, base: dict, override: dict) -> dict:
+        for key, value in override.items():
+            if isinstance(value, dict) and isinstance(base.get(key), dict):
+                base[key] = self._deep_merge(base[key], value)
+            else:
+                base[key] = value
+        return base
 
     def save(self):
         try:
@@ -85,6 +95,20 @@ class ConfigManager:
 
     def set_price_region(self, left, top, width, height):
         self.config["price_region"] = {"left": left, "top": top, "width": width, "height": height}
+        self.save()
+
+    def get_bid1_price_region(self) -> Tuple[int, int, int, int]:
+        return self.get_region("bid1_price_region")
+
+    def set_bid1_price_region(self, left, top, width, height):
+        self.config["bid1_price_region"] = {"left": left, "top": top, "width": width, "height": height}
+        self.save()
+
+    def get_ask1_price_region(self) -> Tuple[int, int, int, int]:
+        return self.get_region("ask1_price_region")
+
+    def set_ask1_price_region(self, left, top, width, height):
+        self.config["ask1_price_region"] = {"left": left, "top": top, "width": width, "height": height}
         self.save()
 
     # 历史OHLC区域
