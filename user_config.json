@@ -1,0 +1,130 @@
+{
+  "config_version": 1,
+  "capture": {
+    "left": 0,
+    "top": 0,
+    "width": 0,
+    "height": 0,
+    "interval_seconds": 0.5
+  },
+  "time_region": {
+    "left": 1653,
+    "top": 454,
+    "width": 67,
+    "height": 18
+  },
+  "price_region": {
+    "left": 1722,
+    "top": 453,
+    "width": 44,
+    "height": 20
+  },
+  "bid1_price_region": {
+    "left": 1786,
+    "top": 454,
+    "width": 44,
+    "height": 19
+  },
+  "ask1_price_region": {
+    "left": 1853,
+    "top": 454,
+    "width": 44,
+    "height": 19
+  },
+  "min_price_change": 1,
+  "max_price_jump": 20,
+  "tesseract_cmd": "./Tesseract-OCR/tesseract.exe",
+  "colors": {
+    "red_threshold": {
+      "r": [
+        250,
+        255
+      ],
+      "g": [
+        0,
+        5
+      ],
+      "b": [
+        0,
+        5
+      ]
+    },
+    "cyan_threshold": {
+      "r": [
+        0,
+        5
+      ],
+      "g": [
+        250,
+        255
+      ],
+      "b": [
+        250,
+        255
+      ]
+    }
+  },
+  "system_prompt": "你是专业超短线量化交易AI，需严格遵循以下策略逻辑，只输出：做多、做空、HOLD，并给出简洁理由。\n\n核心策略规则：\n1. 趋势过滤：价格在EMA30之上为上涨趋势，之下为下跌趋势。震荡时不交易。\n2. 入场信号：\n   - 上涨趋势中，价格回踩EMA7（距离≤2点），且tick动量>0，主动买盘占比>0.3，可做多。\n   - 下跌趋势中，价格反弹至EMA7附近，且tick动量<0，主动卖盘占比>0.3，可做空。\n   - 支撑/压力假突破：前一根K线突破支撑/压力后，当前K线反向，且趋势方向一致，可顺势开仓。\n3. 止盈止损：基于ATR动态计算，止盈约2-4点，止损约1.5-3点。\n4. 禁止逆势、禁止追单、禁止在RSI超买超卖区开仓。\n5. 优先参考主动买卖识别（主动买盘/卖盘占比）。\n\n请根据当前市场状态和上述规则给出建议。",
+  "strategy": {
+    "EMA_SHORT": 2,
+    "EMA_MID": 4,
+    "EMA_LONG": 8,
+    "TREND_STRENGTH_HIGH": 0.06,
+    "TREND_STRENGTH_LOW": 0.015,
+    "RSI_PERIOD": 4,
+    "RSI_LONG_THRESHOLD": 50,
+    "RSI_SHORT_THRESHOLD": 50,
+    "RSI_LONG_MAX": 85,
+    "RSI_SHORT_MIN": 15,
+    "RSI_OS_LONG": 35,
+    "RSI_OB_SHORT": 65,
+    "SIGNAL_COOLDOWN": 8,
+    "DIRECTION_LOCK_TIME": 1,
+    "STOP_AFTER_LOSS": 5,
+    "MAX_CONSECUTIVE_LOSS": 3,
+    "PAUSE_AFTER_MAX_LOSS": 30,
+    "MIN_RANGE": 0.8,
+    "MAX_RANGE": 12,
+    "MAX_DISTANCE_FROM_LOW": 20,
+    "MAX_DISTANCE_FROM_HIGH": 20,
+    "TREND_STOP_MULT": 0.5,
+    "TREND_TAKE_MULT": 1.2,
+    "RANGE_STOP_MULT": 0.5,
+    "RANGE_TAKE_MULT": 0.8,
+    "ATR_SLOPE_FACTOR": 0.04,
+    "ATR_BREAKOUT_FACTOR": 0.03,
+    "VOL_MA_PERIOD": 3,
+    "VOL_RATIO": 0.3,
+    "EXHAUSTION_COUNT": 8,
+    "PULLBACK_MAX_BARS": 1,
+    "PULLBACK_DISTANCE": 4,
+    "ATR_MIN": 1.5,
+    "ATR_MAX": 8,
+    "TICK_CONSISTENCY_THRESHOLD": 0.6,
+    "TICK_WEIGHT": 0.3,
+    "ORDERBOOK_PRESSURE_THRESHOLD": 0.2,
+    "ATR_STOP_MULT": 0.7,
+    "ATR_TAKE_MULT": 1.8,
+    "LONG_TERM_EMA": 20,
+    "ACTIVE_IMBALANCE_THRESHOLD": 0.3,
+    "ACTIVE_WEIGHT": 1
+  },
+  "ohlc_time_region": {
+    "left": 1187,
+    "top": 75,
+    "width": 32,
+    "height": 19
+  },
+  "ohlc_price_region": {
+    "left": 1219,
+    "top": 75,
+    "width": 175,
+    "height": 19
+  },
+  "ohlc_volume_region": {
+    "left": 1467,
+    "top": 75,
+    "width": 45,
+    "height": 19
+  }
+}
